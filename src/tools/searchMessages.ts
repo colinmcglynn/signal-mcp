@@ -4,6 +4,7 @@ import {
   buildMessageWhere,
   MESSAGE_FROM,
   MESSAGE_SELECT_COLUMNS,
+  TIME_KEY,
   type MessageFilters,
   type ScopeFilters,
 } from '../util/sql.js';
@@ -58,7 +59,7 @@ export function searchMessages(
       ${MESSAGE_FROM}
       JOIN messages_fts fts ON fts.rowid = m.rowid
       ${where ? where + ' AND ' : 'WHERE '}messages_fts MATCH ?
-      ORDER BY m.received_at DESC
+      ORDER BY ${TIME_KEY} DESC
       LIMIT ? OFFSET ?
     `;
     allParams.push(escapeFtsQuery(input.query), input.limit, input.offset);
@@ -67,7 +68,7 @@ export function searchMessages(
       SELECT ${MESSAGE_SELECT_COLUMNS}
       ${MESSAGE_FROM}
       ${where ? where + ' AND ' : 'WHERE '}m.body LIKE ?
-      ORDER BY m.received_at DESC
+      ORDER BY ${TIME_KEY} DESC
       LIMIT ? OFFSET ?
     `;
     allParams.push(`%${input.query}%`, input.limit, input.offset);

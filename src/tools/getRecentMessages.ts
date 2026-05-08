@@ -4,6 +4,7 @@ import {
   buildMessageWhere,
   MESSAGE_FROM,
   MESSAGE_SELECT_COLUMNS,
+  TIME_KEY,
   type MessageFilters,
   type ScopeFilters,
 } from '../util/sql.js';
@@ -19,7 +20,7 @@ export function getRecentMessages(
     SELECT ${MESSAGE_SELECT_COLUMNS}
     ${MESSAGE_FROM}
     ${where}
-    ORDER BY m.received_at DESC
+    ORDER BY ${TIME_KEY} DESC
     LIMIT ? OFFSET ?
   `;
   const rows = db.prepare(sql).all(...params, input.limit, input.offset) as RawMessageRow[];
