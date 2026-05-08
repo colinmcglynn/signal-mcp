@@ -18,23 +18,72 @@ tools than the original Python `signal-mcp-server`.
 
 ## Install
 
-### Recommended: clone and register
-
-This is the most reliable path — it works around an npm 11 bug where global
-installs of packages with native deps (`better-sqlite3-multiple-ciphers`)
-get corrupted partway through extraction.
+### Step 1 — clone and install deps
 
 ```bash
 git clone https://github.com/jagypus/signal-mcp.git
 cd signal-mcp
 npm install
-claude mcp add signal --scope user -- node "$(pwd)/dist/index.js"
 ```
 
 The repo ships a pre-built `dist/` so no compile step is needed; `npm install`
-just pulls runtime deps. Open Claude Code and try: *"List my Signal chats."*
+just pulls runtime deps.
 
-#### To update
+### Step 2 — register with your Claude client
+
+The two clients share the same MCP server JSON shape but read it from
+different files. Pick whichever you use.
+
+#### Claude Code
+
+One-liner via the CLI:
+
+```bash
+claude mcp add signal --scope user -- node "$(pwd)/dist/index.js"
+```
+
+Or edit `~/.claude.json` (or a project `.mcp.json`) and add:
+
+```json
+{
+  "mcpServers": {
+    "signal": {
+      "command": "node",
+      "args": ["/Users/you/signal-mcp/dist/index.js"]
+    }
+  }
+}
+```
+
+#### Claude Desktop
+
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
+or `%APPDATA%\Claude\claude_desktop_config.json` (Windows) and add:
+
+```json
+{
+  "mcpServers": {
+    "signal": {
+      "command": "node",
+      "args": ["/Users/you/signal-mcp/dist/index.js"]
+    }
+  }
+}
+```
+
+Then fully quit and relaunch Claude Desktop — it only reads this file at
+startup. (Claude Code picks up `claude mcp add` immediately, but you'll need
+to restart any active sessions.)
+
+### Step 3 — verify
+
+* **Claude Code:** `claude mcp list` should include `signal`.
+* **Claude Desktop:** check the connectors / tools panel; the five `signal`
+  tools should be listed.
+
+Then ask: *"List my Signal chats."*
+
+### Updating
 
 ```bash
 cd /path/to/signal-mcp
@@ -42,45 +91,27 @@ git pull
 npm install
 ```
 
-#### To remove
+Restart Claude Desktop, or restart your Claude Code session, to pick up
+changes.
+
+### Removing
 
 ```bash
+# Claude Code:
 claude mcp remove signal
+
+# Claude Desktop: delete the "signal" entry from claude_desktop_config.json,
+# then relaunch the app.
+
 rm -rf /path/to/signal-mcp
 ```
-
-### Manual config
-
-If you'd rather edit your MCP config directly, add this to your Claude Code
-MCP servers config (e.g. `~/.claude.json`'s `mcpServers` block, or a project
-`.mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "signal": {
-      "command": "node",
-      "args": ["/absolute/path/to/signal-mcp/dist/index.js"]
-    }
-  }
-}
-```
-
-### Verify
-
-```bash
-claude mcp list
-```
-
-You should see `signal` in the list. Restart Claude Code if it was already
-running, then ask it to list your chats.
 
 ### Why not `npm install -g git+https://...`?
 
 It looks attractive but currently fails on npm 11.x: the global-install path
-mishandles native-dep install scripts and partially-extracts the package
-tarball, leaving a broken install. The clone-and-register flow above
-sidesteps the issue entirely.
+mishandles native-dep install scripts (`better-sqlite3-multiple-ciphers`) and
+partially-extracts the package tarball, leaving a broken install. The
+clone-and-register flow above sidesteps the issue entirely.
 
 ## Tools
 
