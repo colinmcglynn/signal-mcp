@@ -1,0 +1,56 @@
+{
+  "name": "signal-mcp",
+  "version": "0.1.0",
+  "description": "MCP server exposing read-only queries over Signal Desktop's encrypted SQLite database.",
+  "license": "MIT",
+  "author": "David Hodgson",
+  "homepage": "https://github.com/jagypus/signal-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jagypus/signal-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jagypus/signal-mcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "signal",
+    "signal-desktop",
+    "sqlcipher",
+    "claude"
+  ],
+  "type": "module",
+  "bin": {
+    "signal-mcp": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepare": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "probe": "tsx scripts/probe.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "better-sqlite3-multiple-ciphers": "^11.7.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
