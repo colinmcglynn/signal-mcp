@@ -18,63 +18,42 @@ tools than the original Python `signal-mcp-server`.
 
 ## Install
 
-### Option A — install from GitHub (recommended)
+### Recommended: clone and register
 
-Installs globally via npm. The repo's `prepare` script runs `tsc` automatically
-so you don't need a pre-built `dist/`.
-
-```bash
-npm install -g git+https://github.com/jagypus/signal-mcp.git
-```
-
-Then register with Claude Code:
-
-```bash
-claude mcp add signal --scope user -- signal-mcp
-```
-
-That's it. Open Claude Code and try: *"List my Signal chats."*
-
-To update later:
-
-```bash
-npm install -g git+https://github.com/jagypus/signal-mcp.git
-```
-
-To remove:
-
-```bash
-claude mcp remove signal
-npm uninstall -g signal-mcp
-```
-
-### Option B — clone and build (for development)
+This is the most reliable path — it works around an npm 11 bug where global
+installs of packages with native deps (`better-sqlite3-multiple-ciphers`)
+get corrupted partway through extraction.
 
 ```bash
 git clone https://github.com/jagypus/signal-mcp.git
 cd signal-mcp
 npm install
-npm run build
 claude mcp add signal --scope user -- node "$(pwd)/dist/index.js"
 ```
 
-### Option C — manual config
+The repo ships a pre-built `dist/` so no compile step is needed; `npm install`
+just pulls runtime deps. Open Claude Code and try: *"List my Signal chats."*
+
+#### To update
+
+```bash
+cd /path/to/signal-mcp
+git pull
+npm install
+```
+
+#### To remove
+
+```bash
+claude mcp remove signal
+rm -rf /path/to/signal-mcp
+```
+
+### Manual config
 
 If you'd rather edit your MCP config directly, add this to your Claude Code
 MCP servers config (e.g. `~/.claude.json`'s `mcpServers` block, or a project
 `.mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "signal": {
-      "command": "signal-mcp"
-    }
-  }
-}
-```
-
-…or, for the cloned-repo path:
 
 ```json
 {
@@ -95,6 +74,13 @@ claude mcp list
 
 You should see `signal` in the list. Restart Claude Code if it was already
 running, then ask it to list your chats.
+
+### Why not `npm install -g git+https://...`?
+
+It looks attractive but currently fails on npm 11.x: the global-install path
+mishandles native-dep install scripts and partially-extracts the package
+tarball, leaving a broken install. The clone-and-register flow above
+sidesteps the issue entirely.
 
 ## Tools
 
