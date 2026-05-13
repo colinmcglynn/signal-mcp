@@ -1,0 +1,66 @@
+#!/usr/bin/env node
+import { closeSignalDb, openSignalDb } from '../db.js';
+import { closeFtsDb, defaultFtsDbPath, openFtsDb } from './db.js';
+import { syncOnce } from './sync.js';
+
+function parseArgs(argv: string[]): { backfill: boolean; quiet: boolean; help: boolean } {
+  const out = { backfill: false, quiet: false, help: false };
+  for (const arg of argv) {
+    if (arg === '--backfill') out.backfill = true;
+    else if (arg === '--quiet' || arg === '-q') out.quiet = true;
+    else if (arg === '--help' || arg === '-h') out.help = true;
+  }
+  return out;
+}
+
+function usage(): void {
+  console.log(`signal-mcp-reindex — run one FTS5 sync pass over Signal Desktop's database.
+
+Usage: signal-mcp-reindex [--backfill] [--quiet]
+
+  --backfill   Reset the watermark and reindex every eligible message.
+               Use on first run, after a schema change, or after deleting the FTS DB.
+  --quiet, -q  Suppress progress output. Only print the final summary.
+  --help, -h   Show this message.
+
+Env:
+  SIGNAL_DIR              Override Signal Desktop's data dir.
+  SIGNAL_MCP_FTS_DB       Override the FTS DB path (default:
+                          ~/Library/Application Support/signal-mcp-fts/fts.db).
+`);
+}
+
+function main(): void {
+  const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    usage();
+    return;
+  }
+
+  const ftsPath = defaultFtsDbPath();
+  const signal = openSignalDb();
+  const fts = openFtsDb(ftsPath);
+
+  const log = args.quiet ? () => undefined : (s: string) => process.stderr.write(`  ${s}\n`);
+
+  if (!args.quiet) {
+    process.stderr.write(
+      `signal-mcp-reindex: signal=${signal.signalDir} fts=${ftsPath} ` +
+        `mode=${args.backfill ? 'backfill' : 'incremental'}\n`,
+    );
+  }
+
+  try {
+    const stats = syncOnce(signal.db, fts.db, { backfill: args.backfill, progress: log });
+    process.stderr.write(
+      `done in ${stats.durationMs}ms: ` +
+        `inserted=${stats.inserted} updated=${stats.updated} deleted=${stats.deleted} ` +
+        `batches=${stats.batches}\n`,
+    );
+  } finally {
+    closeFtsDb(fts);
+    closeSignalDb();
+  }
+}
+
+main();

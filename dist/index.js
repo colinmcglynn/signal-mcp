@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { existsSync } from 'node:fs';
 import { openSignalDb, closeSignalDb } from './db.js';
+import { closeFtsDb, defaultFtsDbPath, openFtsDb } from './indexer/db.js';
 import { listChatsShape, getRecentMessagesShape, getChatMessagesShape, searchMessagesShape, querySqlShape, } from './schema.js';
 import { listChats } from './tools/listChats.js';
 import { getRecentMessages } from './tools/getRecentMessages.js';
@@ -22,6 +24,19 @@ function errorResult(err) {
 }
 async function main() {
     const { db } = openSignalDb();
+    // The FTS side index is built by signal-mcp-reindex. We open it lazily so the server
+    // still starts (and the non-search tools still work) if the user hasn't run reindex yet.
+    let ftsCached;
+    function getFts() {
+        if (ftsCached)
+            return ftsCached;
+        const path = defaultFtsDbPath();
+        if (!existsSync(path)) {
+            throw new Error(`FTS index not found at ${path}. Run \`signal-mcp-reindex --backfill\` to build it.`);
+        }
+        ftsCached = openFtsDb(path, { readOnly: true });
+        return ftsCached;
+    }
     const server = new McpServer({ name: 'signal-mcp', version: '0.1.0' }, {
         capabilities: { tools: {} },
         instructions: "Read-only access to Signal Desktop's local message database. " +
@@ -67,11 +82,13 @@ async function main() {
     });
     server.registerTool('search_messages', {
         title: 'Search Signal message bodies',
-        description: 'Full-text search across all message bodies. Uses FTS5 (messages_fts) when available; otherwise LIKE.',
+        description: 'FTS5 full-text search across all message bodies. Results include a highlighted snippet ' +
+            '(« and » wrap matched terms) and a BM25 score. Filters: since/until, sender, chat_ids, ' +
+            'chat_name_contains. Sort by relevance (default) or recent.',
         inputSchema: searchMessagesShape,
     }, async (args) => {
         try {
-            return jsonResult(searchMessages(db, args));
+            return jsonResult(searchMessages(db, getFts().db, args));
         }
         catch (err) {
             return errorResult(err);
@@ -92,6 +109,8 @@ async function main() {
     const transport = new StdioServerTransport();
     await server.connect(transport);
     const shutdown = () => {
+        if (ftsCached)
+            closeFtsDb(ftsCached);
         closeSignalDb();
         process.exit(0);
     };

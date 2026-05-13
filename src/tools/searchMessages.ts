@@ -11,69 +11,109 @@ import {
 
 export interface SearchMessagesInput extends MessageFilters, ScopeFilters {
   query: string;
-  use_fts: boolean;
+  sort?: 'relevance' | 'recent';
 }
 
-let ftsAvailableCache: boolean | undefined;
-function ftsAvailable(db: Database.Database): boolean {
-  if (ftsAvailableCache !== undefined) return ftsAvailableCache;
-  const row = db
+export interface SearchMessageOut extends MessageOut {
+  snippet: string;
+  score: number;
+}
+
+/**
+ * Build an FTS5 MATCH expression from a user query.
+ *
+ * Splits on whitespace, double-quotes each token (escaping any internal double quotes),
+ * and AND-joins them. So "foo bar's baz" becomes `"foo" AND "bar's" AND "baz"`. This
+ * is the most predictable thing for a casual search: every word must appear, no
+ * operator parsing surprises. Power users can pass a single multi-word phrase by
+ * wrapping in their own quotes in the calling client.
+ */
+function buildFtsMatch(query: string): string {
+  const tokens = query.trim().split(/\s+/).filter((t) => t.length > 0);
+  if (tokens.length === 0) {
+    throw new Error('search query must contain at least one non-whitespace token');
+  }
+  return tokens.map((t) => `"${t.replace(/"/g, '""')}"`).join(' AND ');
+}
+
+interface FtsHit {
+  guid: string;
+  snippet: string;
+  score: number;
+}
+
+function ftsSearch(ftsDb: Database.Database, match: string, hardLimit: number): FtsHit[] {
+  const rows = ftsDb
     .prepare(
-      `SELECT name FROM sqlite_master WHERE type='table' AND name='messages_fts' LIMIT 1`,
+      `SELECT guid,
+              snippet(messages_fts, 0, '«', '»', '…', 14) AS snippet,
+              bm25(messages_fts) AS score
+       FROM messages_fts
+       WHERE messages_fts MATCH ?
+       ORDER BY score
+       LIMIT ?`,
     )
-    .get() as { name?: string } | undefined;
-  if (!row?.name) {
-    ftsAvailableCache = false;
-    return false;
-  }
-  // Signal's messages_fts uses a custom 'signal_tokenizer' registered by Signal
-  // Desktop's native code, so MATCH queries fail from third-party processes.
-  // Probe once with a trivial MATCH and cache the result.
-  try {
-    db.prepare(`SELECT rowid FROM messages_fts WHERE messages_fts MATCH ? LIMIT 1`).all('"a"');
-    ftsAvailableCache = true;
-  } catch {
-    ftsAvailableCache = false;
-  }
-  return ftsAvailableCache;
-}
-
-function escapeFtsQuery(q: string): string {
-  // FTS5 MATCH treats the input as a query expression; wrap as a phrase with embedded quotes escaped.
-  // Sanitizing to a single phrase keeps user input safe and predictable.
-  return `"${q.replace(/"/g, '""')}"`;
+    .all(match, hardLimit) as FtsHit[];
+  return rows;
 }
 
 export function searchMessages(
-  db: Database.Database,
+  signalDb: Database.Database,
+  ftsDb: Database.Database,
   input: SearchMessagesInput,
-): MessageOut[] {
+): SearchMessageOut[] {
+  const match = buildFtsMatch(input.query);
+
+  // Pull a generous candidate pool from FTS so post-filter (sender, date, chat) still
+  // leaves at least `limit` results in most cases. 10x is plenty for typical queries.
+  const hardLimit = Math.min(Math.max(input.limit * 10, 200), 2000);
+  const hits = ftsSearch(ftsDb, match, hardLimit);
+  if (hits.length === 0) return [];
+
+  const guids = hits.map((h) => h.guid);
+  const hitByGuid = new Map(hits.map((h, i) => [h.guid, { ...h, rank: i }]));
+
+  // Pull enriched rows from Signal DB for those guids, applying the same MessageFilters
+  // / ScopeFilters as get_recent_messages so the contract matches.
   const { where, params } = buildMessageWhere(input);
+  const placeholders = guids.map(() => '?').join(',');
+  const filterClause = where
+    ? `${where} AND m.id IN (${placeholders})`
+    : `WHERE m.id IN (${placeholders})`;
 
-  let sql: string;
-  const allParams: unknown[] = [...params];
+  const sortClause =
+    (input.sort ?? 'relevance') === 'recent'
+      ? `ORDER BY ${TIME_KEY} DESC`
+      : ``; // 'relevance' → re-sort in JS using hitByGuid.rank so BM25 wins
 
-  if (input.use_fts && ftsAvailable(db)) {
-    sql = `
-      SELECT ${MESSAGE_SELECT_COLUMNS}
-      ${MESSAGE_FROM}
-      JOIN messages_fts fts ON fts.rowid = m.rowid
-      ${where ? where + ' AND ' : 'WHERE '}messages_fts MATCH ?
-      ORDER BY ${TIME_KEY} DESC
-      LIMIT ? OFFSET ?
-    `;
-    allParams.push(escapeFtsQuery(input.query), input.limit, input.offset);
-  } else {
-    sql = `
-      SELECT ${MESSAGE_SELECT_COLUMNS}
-      ${MESSAGE_FROM}
-      ${where ? where + ' AND ' : 'WHERE '}m.body LIKE ?
-      ORDER BY ${TIME_KEY} DESC
-      LIMIT ? OFFSET ?
-    `;
-    allParams.push(`%${input.query}%`, input.limit, input.offset);
+  const sql = `
+    SELECT ${MESSAGE_SELECT_COLUMNS}
+    ${MESSAGE_FROM}
+    ${filterClause}
+    ${sortClause}
+    LIMIT ? OFFSET ?
+  `;
+
+  const rows = signalDb
+    .prepare(sql)
+    .all(...params, ...guids, input.limit, input.offset) as RawMessageRow[];
+
+  const enriched = rows.map((r) => {
+    const hit = hitByGuid.get(r.id)!;
+    return {
+      ...toMessageOut(r),
+      snippet: hit.snippet,
+      score: hit.score,
+    };
+  });
+
+  if ((input.sort ?? 'relevance') === 'relevance') {
+    enriched.sort((a, b) => {
+      const ra = hitByGuid.get(a.id)!.rank;
+      const rb = hitByGuid.get(b.id)!.rank;
+      return ra - rb;
+    });
   }
 
-  const rows = db.prepare(sql).all(...allParams) as RawMessageRow[];
-  return rows.map(toMessageOut);
+  return enriched;
 }

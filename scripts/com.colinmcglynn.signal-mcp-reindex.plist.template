@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Optional launchd agent for signal-mcp-reindex.
+
+  v1 default is manual: just run `signal-mcp-reindex` (or `npm run reindex`) when you
+  want fresh search. If you'd rather have it run on a schedule, install this plist:
+
+    1. Replace {{NODE_BIN}}, {{REPO}}, and {{USER}} below with absolute paths.
+       - NODE_BIN: output of `which node`
+       - REPO:     absolute path to this repo (where dist/indexer/cli.js lives)
+       - USER:     output of `whoami`
+    2. Copy to ~/Library/LaunchAgents/:
+         cp scripts/com.colinmcglynn.signal-mcp-reindex.plist.template \
+            ~/Library/LaunchAgents/com.colinmcglynn.signal-mcp-reindex.plist
+       (then edit the copy with the replacements above)
+    3. Load it:
+         launchctl load -w ~/Library/LaunchAgents/com.colinmcglynn.signal-mcp-reindex.plist
+
+  Runs every 5 minutes. To uninstall:
+    launchctl unload -w ~/Library/LaunchAgents/com.colinmcglynn.signal-mcp-reindex.plist
+    rm ~/Library/LaunchAgents/com.colinmcglynn.signal-mcp-reindex.plist
+
+  Note: launchd-spawned processes do not have access to the user's keychain via touch ID,
+  so the first run from launchd may fail until you've approved a manual run that caches
+  the keychain entry as "Always Allow".
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.colinmcglynn.signal-mcp-reindex</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{NODE_BIN}}</string>
+    <string>{{REPO}}/dist/indexer/cli.js</string>
+    <string>--quiet</string>
+  </array>
+
+  <key>StartInterval</key>
+  <integer>300</integer>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/{{USER}}/Library/Logs/signal-mcp-reindex.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/{{USER}}/Library/Logs/signal-mcp-reindex.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

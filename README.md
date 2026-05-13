@@ -1,11 +1,25 @@
 # signal-mcp
 
 A Node/TypeScript [MCP](https://modelcontextprotocol.io) server that reads
-Signal Desktop's encrypted SQLite database directly and exposes richer query
-tools than the original Python `signal-mcp-server`.
+Signal Desktop's encrypted SQLite database directly. Forked from
+[jagypus/signal-mcp](https://github.com/jagypus/signal-mcp) and extended with a
+real FTS5 full-text search index over message bodies.
 
 > **Read-only.** The database is opened with `readonly: true` and
-> `query_only=ON`. The server cannot modify Signal's data.
+> `query_only=ON`. The server cannot modify Signal's data, and there is no
+> linked Signal device anywhere in the stack — no `signal-cli`, no send path.
+
+## Why fork
+
+The upstream's `search_messages` claims FTS but silently falls back to
+`body LIKE '%query%'` because Signal Desktop's `messages_fts` table uses a
+custom `signal_tokenizer` registered only by Signal Desktop's native code, so
+`MATCH` queries from third-party processes fail.
+
+This fork builds a separate plaintext FTS5 SQLite index at
+`~/Library/Application Support/signal-mcp-fts/fts.db` and maintains it via a
+`signal-mcp-reindex` command. `search_messages` now actually ranks by BM25,
+returns highlighted snippets, and supports multi-term queries.
 
 ## Requirements
 
@@ -18,16 +32,20 @@ tools than the original Python `signal-mcp-server`.
 
 ## Install
 
-### Step 1 — clone and install deps
+### Step 1 — clone, install, build the FTS index
 
 ```bash
-git clone https://github.com/jagypus/signal-mcp.git
+git clone https://github.com/colinmcglynn/signal-mcp.git
 cd signal-mcp
 npm install
+npm run build               # compile to dist/
+node dist/indexer/cli.js --backfill   # first-time FTS backfill (~10s for 10k messages)
 ```
 
-The repo ships a pre-built `dist/` so no compile step is needed; `npm install`
-just pulls runtime deps.
+The first `--backfill` walks your entire message history and writes the FTS
+index to `~/Library/Application Support/signal-mcp-fts/fts.db`. After that,
+`node dist/indexer/cli.js` (no `--backfill`) does an incremental sync — run it
+whenever you want fresh search.
 
 ### Step 2 — register with your Claude client
 
@@ -120,7 +138,7 @@ clone-and-register flow above sidesteps the issue entirely.
 | `list_chats` | List conversations with last-message metadata, filterable by group/DM, message count, and recency. |
 | `get_recent_messages` | Cross-chat message query with date range, sender, and chat filters. |
 | `get_chat_messages` | Same filter set, scoped to a single chat (by id or name). |
-| `search_messages` | Full-text-ish search across all message bodies. Falls back to `LIKE`. |
+| `search_messages` | FTS5 full-text search against the side index. Multi-term, BM25 ranking, highlighted snippets. |
 | `query_sql` | Read-only SQL passthrough (`SELECT`/`WITH`/`EXPLAIN`/`PRAGMA`). |
 
 All inputs are validated with Zod. Timestamps are ISO 8601 in/out.
@@ -165,12 +183,47 @@ The DB is opened with `better-sqlite3-multiple-ciphers` in `readonly: true`
 mode and `query_only=ON` is set as a belt-and-braces guard. Opening while
 Signal Desktop is running works fine because SQLCipher uses WAL.
 
-### Search caveat
+### How the FTS side index works
 
-`messages_fts` exists but uses Signal's custom `signal_tokenizer` which is
-registered only by Signal Desktop's native code. Third-party readers can't run
-`MATCH` queries against it, so `search_messages` probes once and silently
-falls back to `body LIKE '%query%'`.
+Signal's own `messages_fts` is unusable from outside Signal Desktop (custom
+tokenizer registered by native code). We work around this with a separate
+plaintext SQLite database at
+`~/Library/Application Support/signal-mcp-fts/fts.db` containing:
+
+* A `messages` table with one row per indexable message (incoming/outgoing,
+  body non-empty, not erased).
+* A `messages_fts` virtual table (FTS5, `unicode61` tokenizer with diacritic
+  folding — works for English and most Latin-script languages) that the
+  `search_messages` tool queries with `MATCH` and ranks with `bm25()`.
+* A `sync_state` row holding the `(sent_at, id)` watermark used for resumable
+  incremental sync.
+
+`signal-mcp-reindex` does three things on each pass:
+
+1. **Forward scan** — pull rows with `(sent_at, id) > watermark`, upsert into
+   the FTS DB in batches of 500. Backfill walks from `(0, "")`.
+2. **Edit reconciliation** — re-read current body for every `messageId` in
+   Signal's `edited_messages` table and upsert. Idempotent.
+3. **Delete reconciliation** — remove FTS rows for messages now marked
+   `isErased=1`, plus any hard-deletes that vanished from Signal's `messages`.
+
+The side index is plaintext SQLite. If you want it encrypted at rest, the open
+site in `src/indexer/db.ts` is marked with a `TODO` showing where to swap in
+SQLCipher with a Keychain-stored key.
+
+### `signal-mcp-reindex`
+
+```bash
+# manual happy path
+node dist/indexer/cli.js              # incremental
+node dist/indexer/cli.js --backfill   # force full reindex
+node dist/indexer/cli.js --help
+```
+
+If you want it on a schedule, copy
+`scripts/com.colinmcglynn.signal-mcp-reindex.plist.template` to
+`~/Library/LaunchAgents/`, edit the placeholders, and `launchctl load -w` it.
+The template's header comment walks through the steps.
 
 ## Environment
 
@@ -178,6 +231,7 @@ falls back to `body LIKE '%query%'`.
 |---|---|
 | `SIGNAL_DIR` | Override default Signal data directory (useful for fixtures). |
 | `SIGNAL_KEY` | 64-char hex SQLCipher key, bypassing `config.json`/Keychain. |
+| `SIGNAL_MCP_FTS_DB` | Override the FTS side-index DB path (default: `~/Library/Application Support/signal-mcp-fts/fts.db`). |
 
 ## Cross-platform notes
 
@@ -200,11 +254,17 @@ src/
     listChats.ts
     getRecentMessages.ts
     getChatMessages.ts
-    searchMessages.ts
+    searchMessages.ts    # FTS5 MATCH against the side index
     querySql.ts
+  indexer/
+    db.ts                # open/create the FTS side DB
+    schema.ts            # FTS DDL + schema_version guard
+    sync.ts              # incremental + edit/delete reconciliation
+    cli.ts               # `signal-mcp-reindex` entry
 scripts/
-  probe.ts             # live-DB schema dump
-  smoke.ts             # live-DB end-to-end check
+  probe.ts                            # live-DB schema dump
+  smoke.ts                            # live-DB end-to-end check
+  com.colinmcglynn.signal-mcp-reindex.plist.template  # optional launchd agent
 ```
 
 ## License
