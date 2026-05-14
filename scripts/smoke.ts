@@ -1,4 +1,5 @@
 import { openSignalDb } from '../src/db.js';
+import { openFtsDb } from '../src/indexer/db.js';
 import { listChats } from '../src/tools/listChats.js';
 import { getRecentMessages } from '../src/tools/getRecentMessages.js';
 import { getChatMessages } from '../src/tools/getChatMessages.js';
@@ -6,6 +7,7 @@ import { searchMessages } from '../src/tools/searchMessages.js';
 import { querySql } from '../src/tools/querySql.js';
 
 const { db } = openSignalDb();
+const { db: fts } = openFtsDb(undefined, { readOnly: true });
 
 function header(s: string) {
   console.log(`\n=== ${s} ===`);
@@ -39,9 +41,8 @@ if (chats[0]) {
 }
 
 header('search_messages (FTS) — query="thanks", limit 2');
-const search = searchMessages(db, {
+const search = searchMessages(db, fts, {
   query: 'thanks',
-  use_fts: true,
   sender: 'any',
   only_with_body: true,
   exclude_system: true,
@@ -49,6 +50,17 @@ const search = searchMessages(db, {
   offset: 0,
 });
 console.log(search);
+
+header('search_messages — multi-term "meeting tomorrow", relevance sort');
+const multi = searchMessages(db, fts, {
+  query: 'meeting tomorrow',
+  sender: 'any',
+  only_with_body: true,
+  exclude_system: true,
+  limit: 3,
+  offset: 0,
+});
+console.log(multi.map((m) => ({ chat: m.chat_name, sender: m.sender, snippet: m.snippet, score: m.score })));
 
 header('query_sql — SELECT count(*) FROM messages');
 const q = querySql(db, { sql: 'SELECT COUNT(*) AS n FROM messages', max_rows: 10 });

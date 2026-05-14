@@ -40,19 +40,32 @@ function decryptElectronSafeStorage(encryptedHex: string): string {
 
   let password: string;
   if (platform() === 'darwin') {
-    try {
-      password = execFileSync(
-        'security',
-        ['find-generic-password', '-s', 'Signal Safe Storage', '-a', 'Signal', '-w'],
-        { encoding: 'utf8' },
-      ).trim();
-    } catch (err) {
+    // Signal Desktop uses "Signal Key" as the keychain account name; older builds and the
+    // generic Electron safeStorage default use "Signal". Try both before failing.
+    const candidateAccounts = ['Signal Key', 'Signal'];
+    let lastErr: Error | undefined;
+    let found: string | undefined;
+    for (const account of candidateAccounts) {
+      try {
+        found = execFileSync(
+          'security',
+          ['find-generic-password', '-s', 'Signal Safe Storage', '-a', account, '-w'],
+          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+        ).trim();
+        break;
+      } catch (err) {
+        lastErr = err as Error;
+      }
+    }
+    if (!found) {
       throw new Error(
-        `Failed to read Signal's safeStorage password from macOS Keychain. ` +
+        `Failed to read Signal's safeStorage password from macOS Keychain ` +
+          `(tried accounts: ${candidateAccounts.join(', ')}). ` +
           `Approve the keychain prompt or run with SIGNAL_DIR pointing at a fixture. ` +
-          `Underlying error: ${(err as Error).message}`,
+          `Underlying error: ${lastErr?.message ?? 'unknown'}`,
       );
     }
+    password = found;
   } else if (platform() === 'linux' && prefix === 'v10') {
     password = 'peanuts';
   } else {

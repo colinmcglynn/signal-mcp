@@ -49,14 +49,20 @@ export const getChatMessagesShape = {
 } as const;
 
 export const searchMessagesShape = {
-  query: z.string().min(1).describe('Text to search for in message bodies.'),
+  query: z
+    .string()
+    .min(1)
+    .describe(
+      'Whitespace-separated terms; every term must appear in the message body. ' +
+        'Backed by an FTS5 side index built by signal-mcp-reindex.',
+    ),
   ...messageFilterShape,
   chat_ids: z.array(z.string().min(1)).optional(),
   chat_name_contains: z.string().min(1).optional(),
-  use_fts: z
-    .boolean()
-    .default(true)
-    .describe('Use FTS5 (messages_fts MATCH) when available; otherwise LIKE.'),
+  sort: z
+    .enum(['relevance', 'recent'])
+    .default('relevance')
+    .describe("'relevance' = BM25 ranking; 'recent' = newest first."),
 } as const;
 
 export const querySqlShape = {
