@@ -1,7 +1,10 @@
 #!/usr/bin/env node
+import { createClient as createDashboardClient } from '../dashboard.js';
 import { closeSignalDb, openSignalDb } from '../db.js';
 import { closeFtsDb, defaultFtsDbPath, openFtsDb } from './db.js';
 import { syncOnce } from './sync.js';
+
+const dashboard = createDashboardClient('signal-mcp-reindex');
 
 function parseArgs(argv: string[]): { backfill: boolean; quiet: boolean; help: boolean } {
   const out = { backfill: false, quiet: false, help: false };
@@ -50,6 +53,8 @@ function main(): void {
     );
   }
 
+  dashboard.publishPhase('indexing', { mode: args.backfill ? 'backfill' : 'incremental' });
+
   try {
     const stats = syncOnce(signal.db, fts.db, { backfill: args.backfill, progress: log });
     process.stderr.write(
@@ -57,6 +62,18 @@ function main(): void {
         `inserted=${stats.inserted} updated=${stats.updated} deleted=${stats.deleted} ` +
         `batches=${stats.batches}\n`,
     );
+    dashboard.publishPhase('idle', {
+      event: 'reindex_done',
+      inserted: stats.inserted,
+      updated: stats.updated,
+      deleted: stats.deleted,
+      duration_ms: stats.durationMs,
+    });
+  } catch (err) {
+    const exc = err as Error;
+    dashboard.log('ERROR', `reindex failed: ${exc.name}: ${exc.message}`);
+    dashboard.publishPhase('idle', { event: 'reindex_failed' });
+    throw err;
   } finally {
     closeFtsDb(fts);
     closeSignalDb();
