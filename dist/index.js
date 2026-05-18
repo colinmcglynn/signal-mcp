@@ -37,21 +37,26 @@ function wrapTool(toolName, fn) {
 }
 const dashboard = createDashboardClient('signal-mcp');
 async function main() {
-    // Publish "starting" before anything that can hang (Keychain prompt,
-    // SQLCipher decrypt) so the dashboard always reflects that signal-mcp tried
-    // to come up. If we never reach "idle", that's a useful signal on its own.
-    dashboard.publishPhase('starting', { event: 'open_signal_db' });
-    let signal;
-    try {
-        signal = openSignalDb();
+    // Open the Signal DB lazily on first tool call rather than at startup. Claude
+    // Desktop spawns this server on every session and respawns after reconnects;
+    // eager-opening here would trigger a Keychain prompt for /usr/local/bin/node
+    // even in sessions where the user never invokes a Signal tool.
+    let signalCached;
+    function getDb() {
+        if (signalCached)
+            return signalCached.db;
+        dashboard.publishPhase('starting', { event: 'open_signal_db' });
+        try {
+            signalCached = openSignalDb();
+        }
+        catch (err) {
+            const exc = err;
+            dashboard.log('ERROR', `failed to open Signal DB: ${exc.message}`);
+            dashboard.publishPhase('error', { event: 'open_signal_db_failed', message: exc.message });
+            throw err;
+        }
+        return signalCached.db;
     }
-    catch (err) {
-        const exc = err;
-        dashboard.log('ERROR', `failed to open Signal DB: ${exc.message}`);
-        dashboard.publishPhase('error', { event: 'open_signal_db_failed', message: exc.message });
-        throw err;
-    }
-    const { db } = signal;
     // The FTS side index is built by signal-mcp-reindex. We open it lazily so the server
     // still starts (and the non-search tools still work) if the user hasn't run reindex yet.
     let ftsCached;
@@ -76,31 +81,33 @@ async function main() {
         title: 'List Signal chats',
         description: 'List Signal conversations with last-message metadata. Filters: include_empty, is_group, min_messages, since.',
         inputSchema: listChatsShape,
-    }, wrapTool('list_chats', (args) => listChats(db, args)));
+    }, wrapTool('list_chats', (args) => listChats(getDb(), args)));
     server.registerTool('get_recent_messages', {
         title: 'Get recent Signal messages',
         description: 'Cross-chat message query with date range, sender, and chat filters. Excludes system events by default.',
         inputSchema: getRecentMessagesShape,
-    }, wrapTool('get_recent_messages', (args) => getRecentMessages(db, args)));
+    }, wrapTool('get_recent_messages', (args) => getRecentMessages(getDb(), args)));
     server.registerTool('get_chat_messages', {
         title: 'Get messages from one chat',
         description: 'Fetch messages from a single chat (by chat_id or chat_name) with the same filter set as get_recent_messages.',
         inputSchema: getChatMessagesShape,
-    }, wrapTool('get_chat_messages', (args) => getChatMessages(db, args)));
+    }, wrapTool('get_chat_messages', (args) => getChatMessages(getDb(), args)));
     server.registerTool('search_messages', {
         title: 'Search Signal message bodies',
         description: 'FTS5 full-text search across all message bodies. Results include a highlighted snippet ' +
             '(« and » wrap matched terms) and a BM25 score. Filters: since/until, sender, chat_ids, ' +
             'chat_name_contains. Sort by relevance (default) or recent.',
         inputSchema: searchMessagesShape,
-    }, wrapTool('search_messages', (args) => searchMessages(db, getFts().db, args)));
+    }, wrapTool('search_messages', (args) => searchMessages(getDb(), getFts().db, args)));
     server.registerTool('query_sql', {
         title: 'Run read-only SQL',
         description: 'Execute a single read-only SQL statement (SELECT/WITH/EXPLAIN/PRAGMA) against the Signal database.',
         inputSchema: querySqlShape,
-    }, wrapTool('query_sql', (args) => querySql(db, args)));
-    // Publish "idle" once the server is ready to accept tool calls. Earlier
-    // "starting" → "idle" transition makes the dashboard show actual readiness.
+    }, wrapTool('query_sql', (args) => querySql(getDb(), args)));
+    // Publish "idle" once the server is ready to accept tool calls. The Signal
+    // DB hasn't been opened yet (that's deferred to the first tool call), so
+    // "idle" here genuinely means "server up, waiting for work" — matching the
+    // dashboard manifest's description.
     dashboard.onStartup();
     // Keep the heartbeat fresh between tool calls so the dashboard can
     // distinguish "alive and idle" from "stopped". 60s is well under the
