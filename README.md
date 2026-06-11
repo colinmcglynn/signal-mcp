@@ -173,7 +173,7 @@ Electron's `safeStorage`:
 
 * Strip `v10`/`v11` prefix → AES-128-CBC ciphertext.
 * Encryption key = PBKDF2-HMAC-SHA1(password, "saltysalt", 1003 iters, 16 bytes).
-* On macOS, `password` is fetched via `security find-generic-password -s "Signal Safe Storage" -a "Signal" -w` (one keychain prompt the first time).
+* On macOS, `password` is fetched from the login keychain under service `Signal Safe Storage` (one keychain prompt the first time). It tries account `Signal Key` (current Signal Desktop), then `Signal` (older builds), then a service-only lookup (`security find-generic-password -s "Signal Safe Storage" -w`) that resolves the entry regardless of the account name.
 * IV is 16 bytes of `0x20`.
 
 The plaintext is the 64-char hex SQLCipher key. Older Signal builds with a
